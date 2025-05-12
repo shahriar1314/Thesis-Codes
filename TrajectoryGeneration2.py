@@ -6,7 +6,7 @@ def generate_trajectory(k,
                         p0,
                         ptd,
                         initial_velocity,
-                        kd_alpha,
+                        kd_alpha=0.5,
                         dist_approach=4.0,
                         exit_angle_deg=30.0,
                         td=5.0,
@@ -88,7 +88,9 @@ if __name__ == "__main__":
 
     # Generate & plot for each k
     k = 0.5
-    kd_alpha_set = np.linspace(0, 2, 10)
+    kd_alpha_set = np.linspace(0, 2, 4)
+
+    
     for kd_alpha in kd_alpha_set:
         t, p = generate_trajectory(k, p0, ptd, initial_velocity, kd_alpha)
         ax.plot(p[:, 0], p[:, 1], p[:, 2], label=f"k={k:.1f}, kd_alpha={kd_alpha:.2f}", linewidth=2)   
