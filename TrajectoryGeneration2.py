@@ -74,6 +74,33 @@ def generate_trajectory(k,
     p_full = np.vstack([p1, p2a, p2b])
     return t_full, p_full
 
+def plot_velocity_acceleration(t, p, k):
+    dt = np.gradient(t)
+    velocities = np.gradient(p, axis=0) / dt[:, None]
+    accelerations = np.gradient(velocities, axis=0) / dt[:, None]
+
+    speed = np.linalg.norm(velocities, axis=1)
+    accel_magnitude = np.linalg.norm(accelerations, axis=1)
+
+    plt.figure(figsize=(14, 6))
+
+    plt.subplot(1, 2, 1)
+    plt.plot(t, speed, label=f'k={k}')
+    plt.xlabel('Time [s]')
+    plt.ylabel('Speed [m/s]')
+    plt.title('Velocity Profile')
+    plt.legend()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(t, accel_magnitude, label=f'k={k}')
+    plt.xlabel('Time [s]')
+    plt.ylabel('Acceleration [m/s²]')
+    plt.title('Acceleration Profile')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
 
 if __name__ == "__main__":
     # === Parameters ===
@@ -87,16 +114,19 @@ if __name__ == "__main__":
     ax = fig.add_subplot(111, projection='3d')
 
     # Generate & plot for each k
-    #k_set = np.linspace(0.1, 1.6, 5)
-    #kd_alpha = 0.5
-    kd_alpha_set = np.linspace(0,2,5)
-    k = 0.6
+    k_set = np.linspace(0.1, 1.6, 5)
+    kd_alpha = 0.5
+    # kd_alpha_set = np.linspace(0,2,5)
+    # k = 0.6
 
     
-    for kd_alpha in kd_alpha_set:
+    for k in k_set:
         t, p = generate_trajectory(k, p0, ptd, initial_velocity, kd_alpha)
         ax.plot(p[:, 0], p[:, 1], p[:, 2], label=f"k={k:.1f}, kd_alpha={kd_alpha:.2f}", linewidth=2)   
         # ax.plot(p[:, 0], p[:, 1], p[:, 2], label=f"k={k:.1f}", linewidth=2)
+        # plot_velocity_acceleration(t, p, k)
+
+        
 
     # Annotate key points
     h = ptd - p0; h[2] = 0; h_unit = h / np.linalg.norm(h)
