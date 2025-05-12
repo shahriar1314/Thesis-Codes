@@ -87,8 +87,10 @@ if __name__ == "__main__":
     ax = fig.add_subplot(111, projection='3d')
 
     # Generate & plot for each k
-    k = 0.5
-    kd_alpha_set = np.linspace(0, 2, 4)
+    #k_set = np.linspace(0.1, 1.6, 5)
+    #kd_alpha = 0.5
+    kd_alpha_set = np.linspace(0,2,5)
+    k = 0.6
 
     
     for kd_alpha in kd_alpha_set:
