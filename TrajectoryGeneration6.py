@@ -63,7 +63,7 @@ if __name__ == "__main__":
     p0 = np.array([0.0, 0.0, 0.0])
     ptd = np.array([13.0, 14.0, 0.0])
     initial_velocity = 4.5
-    k_set = np.linspace(0.1, 1.6, 5)
+    k_set = np.arange(00.3, 1.3, 0.1)
     kd_alpha = 0.5
 
     # === Plot 3D Trajectories ===
@@ -113,7 +113,9 @@ if __name__ == "__main__":
 
     # Optional: set fixed axis limits
     ax_v.set_ylim([0, 6])
-    ax_a.set_ylim([0, 10])
+    ax_a.set_ylim([0, 20])
+    ax_v.set_xlim([0, 10])
+    ax_a.set_xlim([0, 10])
 
     plt.tight_layout()
     plt.show()
