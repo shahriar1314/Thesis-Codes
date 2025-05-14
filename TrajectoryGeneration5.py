@@ -1,5 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
+ 
+"""
+Trajectory Generation Varying kd_alpha
+
+"""	
 
 
 def generate_trajectory(k,
@@ -84,7 +89,7 @@ if __name__ == "__main__":
         t, p = generate_trajectory(k, p0, ptd, initial_velocity, k)
 
         # 3D Trajectory
-        ax_traj.plot(p[:, 0], p[:, 1], p[:, 2], label=f"k={k:.1f}, kd_alpha={k:.2f}", linewidth=2)
+        ax_traj.plot(p[:, 0], p[:, 1], p[:, 2], label=f"kd_alpha={k:.2f}", linewidth=2)
 
         # Velocity and acceleration
         dt = np.gradient(t)
@@ -115,7 +120,7 @@ if __name__ == "__main__":
     h_unit = h / np.linalg.norm(h)
     ptd2 = ptd + h_unit * 4.0
 
-    ax_traj.scatter(*p0, color='red', label='Start (p0)', s=50)
+    ax_traj.scatter(*p[0], color='red', label='Start (p0)', s=50)
     ax_traj.scatter(*ptd, color='green', label='Perch Point', s=50)
     ax_traj.scatter(*ptd2, color='orange', label='Post-Approach Point', s=50)
 
