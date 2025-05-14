@@ -55,19 +55,22 @@ if __name__ == "__main__":
     ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('Distance')
     ax1.legend()
-    ax1.grid(Trues)
+    ax1.grid(True)
+    ax1.set_xlim([0, 10])
 
     ax2.set_title('Speed vs Time')
     ax2.set_xlabel('Time (s)')
     ax2.set_ylabel('Speed')
     ax2.legend()
     ax2.grid(True)
+    ax2.set_xlim([0, 10])
 
     ax3.set_title('Acceleration vs Time')
     ax3.set_xlabel('Time (s)')
     ax3.set_ylabel('Acceleration')
     ax3.legend()
     ax3.grid(True)
+    ax3.set_xlim([0, 10])
 
     ax4.set_title('3D Trajectories for Various k')
     ax4.set_xlabel('X')
@@ -75,5 +78,6 @@ if __name__ == "__main__":
     ax4.set_zlabel('Z')
     ax4.legend()
     ax4.grid(True)
+    ax4.set_xlim([0, 10])
 
     plt.show()
