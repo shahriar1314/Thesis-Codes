@@ -1,7 +1,7 @@
 using UnityEngine;
 
-// Perching trajectory: stable initial position, moves first to predefined perpendicular start
-public class PerchingTrajectoryV2Modified : MonoBehaviour
+// Perching trajectory: Tau-based trajectory implementation
+public class PerchingTrajectoryV2: MonoBehaviour
 {
     [Header("Targets")]
     public Transform targetA;
@@ -11,10 +11,12 @@ public class PerchingTrajectoryV2Modified : MonoBehaviour
     public float perpendicularDistance = 10f;
     public float startHeight = 6f;
 
-    [Header("Trajectory Parameters")]
+    [Header("Tau Trajectory Parameters")]
+    public float initialVelocity = 5f;
+    public float tauShapeParam = 0.1f;
+    public int numTrajectoryPoints = 100;
     public float heightOffset = 0.3f;
-    public float moveVelocity = 2f;
-    public float stopDistance = 0.5f;
+    public float stopDistance = 0.1f;
 
     [Header("Stabilization")]
     public float pauseDuration = 5f;
@@ -26,6 +28,8 @@ public class PerchingTrajectoryV2Modified : MonoBehaviour
 
     private Vector3 perpendicularStartPos;
     private Vector3 finalDestination;
+    private Vector3[] tauTrajectory;
+    private int currentTrajectoryIndex = 0;
 
     void Start()
     {
@@ -40,7 +44,6 @@ public class PerchingTrajectoryV2Modified : MonoBehaviour
         Vector3 pB = targetB.position;
         Vector3 mid3D = (pA + pB) * 0.5f;
 
-        // Calculate perpendicular start position
         Vector2 A2 = new Vector2(pA.x, pA.z);
         Vector2 B2 = new Vector2(pB.x, pB.z);
         Vector2 mid2D = (A2 + B2) * 0.5f;
@@ -50,22 +53,30 @@ public class PerchingTrajectoryV2Modified : MonoBehaviour
         perpendicularStartPos = new Vector3(start2D.x, mid3D.y + startHeight, start2D.y);
         finalDestination = mid3D + Vector3.up * heightOffset;
 
+        GenerateTauTrajectory(perpendicularStartPos, finalDestination);
+
         startTime = Time.time;
     }
 
     void FixedUpdate()
     {
-        float step = moveVelocity * Time.fixedDeltaTime;
+        float step;
+
+        Debug.Log("Before Aligning at Midpoint");
 
         if (!isAtStartPosition)
         {
+            step = initialVelocity * Time.fixedDeltaTime;
             transform.position = Vector3.MoveTowards(transform.position, perpendicularStartPos, step);
 
             if (Vector3.Distance(transform.position, perpendicularStartPos) <= stopDistance)
             {
                 isAtStartPosition = true;
-                startTime = Time.time; // reset stabilization timer
+                startTime = Time.time;
             }
+
+            Debug.Log("Aligning at Midpoint");
+
             return;
         }
 
@@ -73,17 +84,42 @@ public class PerchingTrajectoryV2Modified : MonoBehaviour
         {
             if (Time.time - startTime >= pauseDuration)
                 isStabilized = true;
+            
+            Debug.Log("Stablizing");
             return;
         }
 
-        if (hasReachedTarget) return;
+        if (hasReachedTarget || tauTrajectory == null) return;
 
-        transform.position = Vector3.MoveTowards(transform.position, finalDestination, step);
+        step = initialVelocity * Time.fixedDeltaTime;
+        transform.position = Vector3.MoveTowards(transform.position, tauTrajectory[currentTrajectoryIndex], step);
 
-        if (Vector3.Distance(transform.position, finalDestination) <= stopDistance)
+        if (Vector3.Distance(transform.position, tauTrajectory[currentTrajectoryIndex]) <= stopDistance)
         {
-            hasReachedTarget = true;
-            Debug.Log("Midpoint reached.");
+            currentTrajectoryIndex++;
+            if (currentTrajectoryIndex >= tauTrajectory.Length)
+            {
+                hasReachedTarget = true;
+                Debug.Log("Midpoint reached.");
+            }
+        }
+
+        Debug.Log("Traying to follow Tau Trajectory");
+    }
+
+    void GenerateTauTrajectory(Vector3 p0, Vector3 p_td)
+    {
+        float d0 = Vector3.Distance(p0, p_td);
+        float tau0 = -d0 / initialVelocity;
+        float t_d = -tau0 / tauShapeParam;
+
+        tauTrajectory = new Vector3[numTrajectoryPoints];
+        for (int i = 0; i < numTrajectoryPoints; i++)
+        {
+            float t = (t_d / (numTrajectoryPoints - 1)) * i;
+            float d = d0 * Mathf.Pow(1 - t / t_d, 1.0f / tauShapeParam);
+            float lerpFactor = 1 - (d / d0);
+            tauTrajectory[i] = Vector3.Lerp(p0, p_td, lerpFactor);
         }
     }
 }
