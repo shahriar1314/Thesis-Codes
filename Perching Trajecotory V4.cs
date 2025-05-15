@@ -1,12 +1,11 @@
 using UnityEngine;
-using System.Collections;
 
 
-// Tau Theory worked. Trying to skipping some frames with IEnumerator. Kinda works. 
-// Old Version
+// Tau Theory with alpha angle worked. but the cupath isn't curved yet. 
+// Original Version. 
 
 
-// Perching trajectory: Coroutine-based Tau trajectory with adjustable update frequency
+// Perching trajectory: Tau-based trajectory implementation
 public class PerchingTrajectoryV4 : MonoBehaviour
 {
     [Header("Targets")]
@@ -19,12 +18,11 @@ public class PerchingTrajectoryV4 : MonoBehaviour
 
     [Header("Tau Trajectory Parameters")]
     public float initialVelocity = 5f;
-    public float tauShapeParam = 0.4f;
-    public int numTrajectoryPoints = 200;
-    public float trajectoryDuration = 10f;
+    public float tauShapeParamk = 0.4f;
+    public float kdAlpha = 0.4f; 
+    public int numTrajectoryPoints = 5000;
     public float heightOffset = 0.3f;
     public float stopDistance = 0.1f;
-    public float trajectoryUpdateInterval = 1f; // Update every 0.1 seconds
 
     [Header("Stabilization")]
     public float pauseDuration = 5f;
@@ -37,6 +35,7 @@ public class PerchingTrajectoryV4 : MonoBehaviour
     private Vector3 perpendicularStartPos;
     private Vector3 finalDestination;
     private Vector3[] tauTrajectory;
+
 
     void Start()
     {
@@ -67,6 +66,8 @@ public class PerchingTrajectoryV4 : MonoBehaviour
 
     void FixedUpdate()
     {
+        
+
         if (!isAtStartPosition)
         {
             float step = initialVelocity * Time.fixedDeltaTime;
@@ -85,40 +86,67 @@ public class PerchingTrajectoryV4 : MonoBehaviour
             if (Time.time - startTime >= pauseDuration)
             {
                 isStabilized = true;
-                StartCoroutine(FollowTauTrajectory());
+                startTime = Time.time;
             }
             return;
         }
-    }
 
-    IEnumerator FollowTauTrajectory()
-    {
-        int currentTrajectoryIndex = 0;
+        if (hasReachedTarget || tauTrajectory == null)
+            return;
 
-        while (currentTrajectoryIndex < tauTrajectory.Length)
+
+        float elapsed = Time.time - startTime;
+        float trajectoryDuration = numTrajectoryPoints * Time.fixedDeltaTime;
+        float tNorm = Mathf.Clamp01(elapsed / trajectoryDuration);
+        int currentTrajectoryIndex = Mathf.Min(Mathf.FloorToInt(tNorm * (numTrajectoryPoints - 1)), numTrajectoryPoints - 1);
+
+        transform.position = tauTrajectory[currentTrajectoryIndex];
+
+        if (currentTrajectoryIndex >= numTrajectoryPoints - 1)
         {
-            transform.position = tauTrajectory[currentTrajectoryIndex];
-            currentTrajectoryIndex++;
-            yield return new WaitForSeconds(trajectoryUpdateInterval);
+            hasReachedTarget = true;
+            Debug.Log("Midpoint reached.");
         }
-
-        hasReachedTarget = true;
-        Debug.Log("Midpoint reached.");
     }
 
     void GenerateTauTrajectory(Vector3 p0, Vector3 p_td)
     {
+        // 1) initial distance and initial pitch‐angle
         float d0 = Vector3.Distance(p0, p_td);
+        // Unity’s y is “up” here
+        float initialVerticalGap = p0.y - p_td.y;
+        float initialSinAlpha = initialVerticalGap / d0;
+        float alpha0 = Mathf.Asin(initialSinAlpha);
+
+        // 2) tau‐law distance gap (eq. 13)
         float tau0 = -d0 / initialVelocity;
-        float t_d = -tau0 / tauShapeParam;
+        float t_d  = -tau0 / tauShapeParamk;        // td = -τ0 / k
 
         tauTrajectory = new Vector3[numTrajectoryPoints];
         for (int i = 0; i < numTrajectoryPoints; i++)
         {
+            // normalized time along the gap
             float t = (t_d / (numTrajectoryPoints - 1)) * i;
-            float d = d0 * Mathf.Pow(1 - t / t_d, 1.0f / tauShapeParam);
-            float lerpFactor = 1 - (d / d0);
-            tauTrajectory[i] = Vector3.Lerp(p0, p_td, lerpFactor);
+
+            // distance gap d(t) = d0 * (1 - t/td)^(1/k)  (same as before)
+            float d = d0 * Mathf.Pow(1 - t / t_d, 1.0f / tauShapeParamk);
+
+            // 3) pitch‐angle coupling α(t) = α0 * (d/d0)^(1/kd,α)  (eq. 15)
+            float alpha = alpha0 * Mathf.Pow(d / d0, 1.0f / kdAlpha);
+            float sinAlpha = Mathf.Sin(alpha);
+
+            // 4) interpolation weight λ = [d·sinα] / [d0·sinα0]
+            float lambda = (d * sinAlpha) / (d0 * initialSinAlpha);
+
+            // 5) build p(t) using eq. (16):
+            //    horizontal interp between p0 and p_td by λ,
+            //    vertical = p_td.y + d·sinα
+            float x = (1 - lambda) * p_td.x + lambda * p0.x;
+            float z = (1 - lambda) * p_td.z + lambda * p0.z;
+            float y = p_td.y + d * sinAlpha;
+
+            tauTrajectory[i] = new Vector3(x, y, z);
         }
     }
+
 }
