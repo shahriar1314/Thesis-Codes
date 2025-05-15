@@ -1,7 +1,7 @@
 using UnityEngine;
 
 // Perching trajectory: Tau-based trajectory implementation
-public class PerchingTrajectoryV2: MonoBehaviour
+public class PerchingTrajectoryV3 : MonoBehaviour
 {
     [Header("Targets")]
     public Transform targetA;
@@ -13,7 +13,7 @@ public class PerchingTrajectoryV2: MonoBehaviour
 
     [Header("Tau Trajectory Parameters")]
     public float initialVelocity = 5f;
-    public float tauShapeParam = 0.1f;
+    public float tauShapeParam = 0.4f;
     public int numTrajectoryPoints = 100;
     public float heightOffset = 0.3f;
     public float stopDistance = 0.1f;
@@ -29,7 +29,10 @@ public class PerchingTrajectoryV2: MonoBehaviour
     private Vector3 perpendicularStartPos;
     private Vector3 finalDestination;
     private Vector3[] tauTrajectory;
-    private int currentTrajectoryIndex = 0;
+
+    private int frameCounter = 0;
+    public int skipFrames = 50; // Update only once every 50 physics frames
+
 
     void Start()
     {
@@ -60,13 +63,11 @@ public class PerchingTrajectoryV2: MonoBehaviour
 
     void FixedUpdate()
     {
-        float step;
-
-        Debug.Log("Before Aligning at Midpoint");
+        
 
         if (!isAtStartPosition)
         {
-            step = initialVelocity * Time.fixedDeltaTime;
+            float step = initialVelocity * Time.fixedDeltaTime;
             transform.position = Vector3.MoveTowards(transform.position, perpendicularStartPos, step);
 
             if (Vector3.Distance(transform.position, perpendicularStartPos) <= stopDistance)
@@ -74,37 +75,35 @@ public class PerchingTrajectoryV2: MonoBehaviour
                 isAtStartPosition = true;
                 startTime = Time.time;
             }
-
-            Debug.Log("Aligning at Midpoint");
-
             return;
         }
 
         if (!isStabilized)
         {
             if (Time.time - startTime >= pauseDuration)
+            {
                 isStabilized = true;
-            
-            Debug.Log("Stablizing");
+                startTime = Time.time;
+            }
             return;
         }
 
-        if (hasReachedTarget || tauTrajectory == null) return;
+        if (hasReachedTarget || tauTrajectory == null)
+            return;
 
-        step = initialVelocity * Time.fixedDeltaTime;
-        transform.position = Vector3.MoveTowards(transform.position, tauTrajectory[currentTrajectoryIndex], step);
 
-        if (Vector3.Distance(transform.position, tauTrajectory[currentTrajectoryIndex]) <= stopDistance)
+        float elapsed = Time.time - startTime;
+        float trajectoryDuration = numTrajectoryPoints * Time.fixedDeltaTime;
+        float tNorm = Mathf.Clamp01(elapsed / trajectoryDuration);
+        int currentTrajectoryIndex = Mathf.Min(Mathf.FloorToInt(tNorm * (numTrajectoryPoints - 1)), numTrajectoryPoints - 1);
+
+        transform.position = tauTrajectory[currentTrajectoryIndex];
+
+        if (currentTrajectoryIndex >= numTrajectoryPoints - 1)
         {
-            currentTrajectoryIndex++;
-            if (currentTrajectoryIndex >= tauTrajectory.Length)
-            {
-                hasReachedTarget = true;
-                Debug.Log("Midpoint reached.");
-            }
+            hasReachedTarget = true;
+            Debug.Log("Midpoint reached.");
         }
-
-        Debug.Log("Traying to follow Tau Trajectory");
     }
 
     void GenerateTauTrajectory(Vector3 p0, Vector3 p_td)
