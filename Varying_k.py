@@ -1,6 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+"""
+OLD Graph 
+"""
+
 def tau_action_gap_t_d(d0, v0, k):
     """
     Compute time-to-go t_d for closing a distance gap under constant tau rate.
