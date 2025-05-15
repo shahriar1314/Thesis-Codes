@@ -1,12 +1,10 @@
 using UnityEngine;
 
+// Perching trajectory: Tau-based curved dive (α–coupling version)
+// Original Version 
+// Probably everything working, k, kd, curved angle
 
-// Tau Theory with alpha angle worked. but the cupath isn't curved yet. 
-// Original Version. 
-
-
-// Perching trajectory: Tau-based trajectory implementation
-public class PerchingTrajectoryV4 : MonoBehaviour
+public class PerchingTrajectoryV5 : MonoBehaviour
 {
     [Header("Targets")]
     public Transform targetA;
@@ -19,7 +17,7 @@ public class PerchingTrajectoryV4 : MonoBehaviour
     [Header("Tau Trajectory Parameters")]
     public float initialVelocity = 5f;
     public float tauShapeParamk = 0.4f;
-    public float kdAlpha = 0.4f; 
+    public float kdAlpha = 0.4f;
     public int numTrajectoryPoints = 5000;
     public float heightOffset = 0.3f;
     public float stopDistance = 0.1f;
@@ -27,15 +25,14 @@ public class PerchingTrajectoryV4 : MonoBehaviour
     [Header("Stabilization")]
     public float pauseDuration = 5f;
 
-    private float startTime;
-    private bool isAtStartPosition = false;
-    private bool isStabilized = false;
-    private bool hasReachedTarget = false;
-
     private Vector3 perpendicularStartPos;
     private Vector3 finalDestination;
     private Vector3[] tauTrajectory;
 
+    private float startTime;
+    private bool isAtStartPosition = false;
+    private bool isStabilized = false;
+    private bool hasReachedTarget = false;
 
     void Start()
     {
@@ -46,12 +43,11 @@ public class PerchingTrajectoryV4 : MonoBehaviour
             return;
         }
 
+        // 1) compute start and touchdown positions
         Vector3 pA = targetA.position;
         Vector3 pB = targetB.position;
         Vector3 mid3D = (pA + pB) * 0.5f;
-
-        Vector2 A2 = new Vector2(pA.x, pA.z);
-        Vector2 B2 = new Vector2(pB.x, pB.z);
+        Vector2 A2 = new Vector2(pA.x, pA.z), B2 = new Vector2(pB.x, pB.z);
         Vector2 mid2D = (A2 + B2) * 0.5f;
         Vector2 perpDir = new Vector2(-(B2 - A2).y, (B2 - A2).x).normalized;
         Vector2 start2D = mid2D + perpDir * perpendicularDistance;
@@ -59,21 +55,20 @@ public class PerchingTrajectoryV4 : MonoBehaviour
         perpendicularStartPos = new Vector3(start2D.x, mid3D.y + startHeight, start2D.y);
         finalDestination = mid3D + Vector3.up * heightOffset;
 
+        // 2) precompute curved tau‐law trajectory
         GenerateTauTrajectory(perpendicularStartPos, finalDestination);
-
         startTime = Time.time;
     }
 
     void FixedUpdate()
     {
-        
-
+        // Move to start perch
         if (!isAtStartPosition)
         {
             float step = initialVelocity * Time.fixedDeltaTime;
             transform.position = Vector3.MoveTowards(transform.position, perpendicularStartPos, step);
 
-            if (Vector3.Distance(transform.position, perpendicularStartPos) <= stopDistance)
+            if ((transform.position - perpendicularStartPos).sqrMagnitude <= stopDistance * stopDistance)
             {
                 isAtStartPosition = true;
                 startTime = Time.time;
@@ -81,6 +76,7 @@ public class PerchingTrajectoryV4 : MonoBehaviour
             return;
         }
 
+        // Stabilize hover
         if (!isStabilized)
         {
             if (Time.time - startTime >= pauseDuration)
@@ -91,62 +87,63 @@ public class PerchingTrajectoryV4 : MonoBehaviour
             return;
         }
 
-        if (hasReachedTarget || tauTrajectory == null)
-            return;
-
+        // Follow curved trajectory
+        if (hasReachedTarget || tauTrajectory == null) return;
 
         float elapsed = Time.time - startTime;
-        float trajectoryDuration = numTrajectoryPoints * Time.fixedDeltaTime;
-        float tNorm = Mathf.Clamp01(elapsed / trajectoryDuration);
-        int currentTrajectoryIndex = Mathf.Min(Mathf.FloorToInt(tNorm * (numTrajectoryPoints - 1)), numTrajectoryPoints - 1);
+        float duration = numTrajectoryPoints * Time.fixedDeltaTime;
+        float tNorm = Mathf.Clamp01(elapsed / duration);
+        int idx = Mathf.Min(Mathf.FloorToInt(tNorm * (numTrajectoryPoints - 1)), numTrajectoryPoints - 1);
 
-        transform.position = tauTrajectory[currentTrajectoryIndex];
-
-        if (currentTrajectoryIndex >= numTrajectoryPoints - 1)
+        transform.position = tauTrajectory[idx];
+        if (idx >= numTrajectoryPoints - 1)
         {
             hasReachedTarget = true;
-            Debug.Log("Midpoint reached.");
+            Debug.Log("Touchdown reached.");
         }
     }
 
     void GenerateTauTrajectory(Vector3 p0, Vector3 p_td)
     {
-        // 1) initial distance and initial pitch‐angle
         float d0 = Vector3.Distance(p0, p_td);
-        // Unity’s y is “up” here
-        float initialVerticalGap = p0.y - p_td.y;
-        float initialSinAlpha = initialVerticalGap / d0;
-        float alpha0 = Mathf.Asin(initialSinAlpha);
+        Vector3 delta = p0 - p_td;
 
-        // 2) tau‐law distance gap (eq. 13)
+        // unit direction in XZ (ground plane)
+        Vector3 dirXZ = new Vector3(delta.x, 0f, delta.z).normalized;
+
+        // initial pitch angle α₀ between vertical and d₀
+        float initialVertGap = p0.y - p_td.y;
+        float alpha0 = Mathf.Asin(initialVertGap / d0);
+
+        // tau‐law parameters
         float tau0 = -d0 / initialVelocity;
-        float t_d  = -tau0 / tauShapeParamk;        // td = -τ0 / k
+        float t_d = -tau0 / tauShapeParamk;
+        float invK = 1f / tauShapeParamk;
+        float invKd = 1f / kdAlpha;
 
         tauTrajectory = new Vector3[numTrajectoryPoints];
         for (int i = 0; i < numTrajectoryPoints; i++)
         {
-            // normalized time along the gap
-            float t = (t_d / (numTrajectoryPoints - 1)) * i;
+            // time and distance gap
+            float t = (t_d * i) / (numTrajectoryPoints - 1);
+            float d = d0 * Mathf.Pow(1f - t / t_d, invK);
 
-            // distance gap d(t) = d0 * (1 - t/td)^(1/k)  (same as before)
-            float d = d0 * Mathf.Pow(1 - t / t_d, 1.0f / tauShapeParamk);
+            // α‐coupling
+            float alpha = alpha0 * Mathf.Pow(d / d0, invKd);
+            float cosA = Mathf.Cos(alpha);
+            float sinA = Mathf.Sin(alpha);
 
-            // 3) pitch‐angle coupling α(t) = α0 * (d/d0)^(1/kd,α)  (eq. 15)
-            float alpha = alpha0 * Mathf.Pow(d / d0, 1.0f / kdAlpha);
-            float sinAlpha = Mathf.Sin(alpha);
+            // horizontal reach & vertical rise
+            float h = d * cosA;
+            float y = p_td.y + d * sinA;
 
-            // 4) interpolation weight λ = [d·sinα] / [d0·sinα0]
-            float lambda = (d * sinAlpha) / (d0 * initialSinAlpha);
-
-            // 5) build p(t) using eq. (16):
-            //    horizontal interp between p0 and p_td by λ,
-            //    vertical = p_td.y + d·sinα
-            float x = (1 - lambda) * p_td.x + lambda * p0.x;
-            float z = (1 - lambda) * p_td.z + lambda * p0.z;
-            float y = p_td.y + d * sinAlpha;
-
-            tauTrajectory[i] = new Vector3(x, y, z);
+            // build curved point
+            Vector3 horizDisp = dirXZ * h;
+            tauTrajectory[i] = new Vector3(
+                p_td.x + horizDisp.x,
+                y,
+                p_td.z + horizDisp.z
+            );
         }
     }
-
 }
