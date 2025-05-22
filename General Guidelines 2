@@ -1,0 +1,163 @@
+## RUNNING ML AGENT ## 
+conda activate ml-agents-3
+mlagents-learn colcon_ws/src/smarc2/simulation/ml_agents/ml-agents-latest_release/config/ppo/trainer_config.yaml --run-id=run19
+
+mlagents-learn colcon_ws/src/smarc2/simulation/ml_agents/ml-agents-latest_release/config/sac/Basic.yaml --run-id=run10
+
+tensorboard --logdir results 
+
+
+cd colcon_ws 
+colcon build 
+source install/setup.bash
+
+
+
+## ML AGENTS ##
+
+source mlagents-env/bin/activate #to activate mlagents-env
+
+download the latest realese from here : https://unity-technologies.github.io/ml-agents/
+
+extract it to simulation 
+edit manifest.jason from unitystandards/packages/manifest.jason
+include these two lines: according to the path 
+
+    "com.unity.ml-agents": "file:/home/shs/colcon_ws/src/smarc2/simulation/ml_agents/ml-agents-latest_release/com.unity.ml-agents",
+    "com.unity.ml-agents.extensions": "file:/home/shs/colcon_ws/src/smarc2/simulation/ml_agents/ml-agents-latest_release/com.unity.ml-agents.extensions"
+
+write your scripts in unitystandards (not unityassets)
+
+set behaviour name : DroneAgent // (as mentioned in the trainer_config.yaml file)
+set max step to 1e6 
+
+
+
+
+## ML AGENT ENV CREATION ## 
+
+install miniconda 
+
+then create env using this : 
+
+
+conda create --name ml-agents-3 python=3.10.12
+conda activate ml-agents-3
+pip install torch~=2.2.1 --index-url https://download.pytorch.org/whl/cpu
+pip install numpy==1.23.5
+pip install ./ml-agents-envs
+
+cd /path/to/ml-agents
+python -m pip install ./ml-agents-envs
+python -m pip install ./ml-agents
+
+
+
+## RUNNING ML AGENT ##
+
+conda activate ml-agents-3
+mlagents-learn colcon_ws/src/smarc2/simulation/ml_agents/ml-agents-latest_release/config/ppo/trainer_config.yaml --run-id=run1
+tensorboard --logdir results 
+
+
+## BASICS ##
+
+ros2 run tf2_tools view_frames
+
+
+## TURTLESIM ##
+
+ros2 run turtlesim turtlesim_node 
+ros2 run turtlesim turtle_teleop_key
+colcon build --packages-select turtle_midpoint 
+source install/setup.bash 
+ros2 service call /spawn turtlesim/srv/Spawn "{x: 5.5, y: 5.5, theta: 0.0, name: 'turtle2'}"
+ros2 run turtle_midpoint turtle_midpoint
+ros2 service call /kill turtlesim/srv/Kill "{name: 'turtle2'}"
+
+
+## TURTLEBOT ##
+source /opt/ros/humble/setup.bash
+source ~/turtlebot3_ws/install/setup.bash  # If using a custom workspace
+export TURTLEBOT3_MODEL=burger  # Change to waffle or waffle_pi if needed
+
+
+ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+ros2 launch turtlebot3_cartographer cartographer.launch.py use_sim_time:=true  #starts SLAM 
+ros2 run nav2_map_server map_saver_cli -f my_map #saves the map 
+
+
+ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=true map:=<your_map.yaml>
+ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped "header: 
+  frame_id: 'map'
+pose:
+  position: {x: 2.0, y: 3.0, z: 0.0}
+  orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}"  #for sending navigation goal 
+
+
+ros2 run turtlebot3_teleop teleop_keyboard
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.5}}"   # manually publishing velocity commands
+
+ros2 service call /reset_simulation std_srvs/srv/Empty
+ros2 service call /reset_world std_srvs/srv/Empty
+
+
+ros2 node list
+ros2 topic list 
+ros2 topic echo /odom 
+ros2 topic echo /scan 
+ros2 topic type /cmd_vel 
+
+
+## General Notes ##
+
+make 2 agents, divide the problem into two parts, first go the point then come back 
+add negative reward to the step count, two agent(!) if possible
+
+
+
+
+
+## MANIPULATOR ## 
+
+
+colcon build --mixin release --executor sequential
+
+cd ~/ws_moveit
+colcon build --packages-select hello_moveit
+source ~/ws_moveit/install/setup.bash
+
+ros2 launch moveit2_tutorials demo.launch.py
+
+
+conda deactivate 
+cd ~/ws_moveit
+source install/setup.bash
+
+ros2 launch moveit2_tutorials demo.launch.py
+ros2 run hello_moveit hello_moveit
+
+ros2 launch moveit_task_constructor_demo demo.launch.py
+ros2 launch moveit_task_constructor_demo run.launch.py exe:=pick_place_demo
+
+
+conda deactivate 
+cd ~/moveit2_obb
+source install/setup.bash
+clear
+
+ros2 launch panda_moveit_config moveit_gazebo_obb.py
+ros2 launch yolov8_obb yolov8_obb.launch.py 
+python3 UI/bolt_selector.py
+
+
+touch drone_target_publisher2.py
+chmod +x drone_target_publisher2.py
+
+source from colcon_ws
+
+shs@shs:~/colcon_ws$ source install/setup.bash 
+shs@shs:~/colcon_ws$ cd src/smarc2/scripts/
+shs@shs:~/colcon_ws/src/smarc2/scripts$ ./unity_ros_bridge.sh
+
+
