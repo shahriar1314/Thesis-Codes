@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Perching Trajecotory V2")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bd6c418cc323e18d9097c328d7827ffe3f2faa75")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+38be1207e58f4baa7fbc5f568c629a55f6b647be")]
 [assembly: System.Reflection.AssemblyProductAttribute("Perching Trajecotory V2")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Perching Trajecotory V2")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

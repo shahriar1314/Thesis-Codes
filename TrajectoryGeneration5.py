@@ -69,7 +69,7 @@ if __name__ == "__main__":
     ptd = np.array([13.0, 14.0, 0.0])
     initial_velocity = 4.5
     k = 0.6
-    k_set = np.linspace(0, 1.2, 5)
+    k_set = np.linspace(0, 1.5, 6)
 
     # === Figure for velocity & acceleration plots ===
     fig_va, (ax_v, ax_a) = plt.subplots(1, 2, figsize=(14, 6))
@@ -101,6 +101,7 @@ if __name__ == "__main__":
         # Add to combined plots
         ax_v.plot(t, speed, label=f"kd_alpha={k:.2f}")
         ax_a.plot(t, accel_magnitude, label=f"kd_alpha={k:.2f}")
+        
 
     # === Finalize velocity & acceleration plots ===
     ax_v.legend()
@@ -124,10 +125,12 @@ if __name__ == "__main__":
     ax_traj.scatter(*ptd, color='green', label='Perch Point', s=50)
     ax_traj.scatter(*ptd2, color='orange', label='Post-Approach Point', s=50)
 
-    ax_traj.set_xlabel('X (m)')
-    ax_traj.set_ylabel('Y (m)')
-    ax_traj.set_zlabel('Z (m)')
+    ax_traj.set_xlabel('X (m)', fontsize = 14)
+    ax_traj.set_ylabel('Y (m)', fontsize = 14)
+    ax_traj.set_zlabel('Z (m)', fontsize = 14)
     ax_traj.set_title('UAV Perch & Fly-Away Trajectories for Multiple kd_alpha Values')
     ax_traj.legend()
+    legend = ax_traj.legend(fontsize=14) 
+    legend.set_draggable(True)
     plt.tight_layout()
     plt.show()
