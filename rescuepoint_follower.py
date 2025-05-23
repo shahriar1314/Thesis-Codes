@@ -22,28 +22,35 @@ class WaypointFollower(Node):
         
         # PARAMETERS FOR TAU‐BASED TRAJECTORY 
         self.initial_velocity  = 5.0    # m/s for both phases
-        self.phase1_velocity   = 15.0   # m/s to go to drone's current position to the starting point 
+        self.phase1_velocity   = 15.0   # m/s to go from drone's position to the starting point 
         self.tau_k             = 0.4    # shape param k
         self.kd_alpha          = 0.8    # α‐coupling exponent
-        self.height_offset     = 0.4    # final vertical offset [m]
+        self.height_offset     = 0.3    # final vertical offset [m]
         self.start_threshold   = 0.2    # m to consider “arrived” at start
-        self.sam_threshold     = 1.0    # m to consider “close to SAM”
-        self.forward_distance  = 40.0    # m to go forward after SAM
-        self.flat_velocity     = 10.0    # m/s horizontal constant velocity
-
+        self.sam_threshold     = 1.0    # m to consider “close to SAM"
+        self.forward_distance  = 40.0   # m to go forward after SAM
+        self.flat_velocity     = 10.0   # m/s horizontal constant velocity
+        # PARAMETERS FOR INCLINE PHASE
+        self.incline_distance  = 40.0  # m to ascend along incline
+        
         # STATE
-        self.sam_pose         = None    # latest SAM position [x,y,z]
-        self.quad_pose        = None    # latest quadrotor position [x,y,z]
-        self.start3D          = None    # perpendicular start point
-        self.touchdown        = None    # tau touchdown point
-        self.reached_start    = False   # have we driven to start3D?
-        self.waypoints        = []      # tau‐law trajectory waypoints
-        self.step_index       = 0       # index for tau waypoints
+        self.sam_pose          = None   # latest SAM position [x,y,z]
+        self.quad_pose         = None   # latest quadrotor position [x,y,z]
+        self.start3D           = None   # perpendicular start point
+        self.touchdown         = None   # tau touchdown point
+        self.reached_start     = False  # have we driven to start3D?
+        self.waypoints         = []     # tau‐law trajectory waypoints
+        self.step_index        = 0      # index for tau waypoints
 
         # --- FORWARD (flat) PHASE STATE ---
-        self.forward_phase    = False   # have we switched to flat after SAM?
-        self.flat_direction   = None    # unit vector of horizontal motion
-        self.flat_traveled    = 0.0     # distance traveled in flat phase
+        self.forward_phase     = False  # have we switched to flat after tau?
+        self.flat_direction    = None   # unit vector of horizontal motion
+        self.flat_traveled     = 0.0    # distance traveled in flat phase
+
+        # --- INCLINE PHASE STATE ---
+        self.incline_phase     = False  # have we switched to incline?
+        self.incline_direction = None   # unit vector of incline motion
+        self.incline_traveled  = 0.0    # distance traveled along incline
 
         # Subscribers for SAM and quad odometry
         self.sub_sam  = self.create_subscription(
@@ -125,12 +132,13 @@ class WaypointFollower(Node):
         Periodic function triggered by ROS timer:
         1. Waits until both SAM and quad poses are available.
         2. On first run, computes the perpendicular start and touchdown points.
-        3. Phase 1: drives to start3D at initial_velocity.
+        3. Phase 1: drives to start3D at phase1_velocity.
            Once within start_threshold, precomputes tau‐law waypoints.
         4. Phase 2: publishes tau‐law trajectory waypoints.
            If within sam_threshold of SAM, switches to flat phase.
         5. Flat Phase: moves straight ahead with flat_velocity, keeping height constant, until forward_distance reached.
-        6. Shuts down the node when the flat phase is completed.
+        6. Incline Phase: after flat, ascends at 45° in same horizontal direction with flat_velocity, for incline_distance.
+        7. Shuts down the node when the incline phase is completed.
         """
         # 1. Ensure both poses have been received
         if self.sam_pose is None or self.quad_pose is None:
@@ -139,9 +147,9 @@ class WaypointFollower(Node):
 
         # 2. Compute start3D & touchdown once
         if self.start3D is None:
-            # 1) Define two SAM points: actual and +4 m in Y
+            # 1) Define two SAM points: actual and +2 m in Y
             pA = self.sam_pose
-            pB = pA + np.array([0.0, 2.0, 0.0])
+            pB = pA + np.array([0.0, 1.6, 0.0])
 
             # 2) Midpoint in 3D
             mid3D = (pA + pB) / 2.0
@@ -174,7 +182,7 @@ class WaypointFollower(Node):
                 self.get_logger().info(
                     f'Reached start. Computed {len(self.waypoints)} tau‐law waypoints.')
             else:
-                # Step toward the start point at phase1_velocity 
+                # Step toward the start point at phase1_velocity
                 step_len = self.phase1_velocity * self.dt
                 direction = vec / dist
                 next_pt = self.quad_pose + direction * min(step_len, dist)
@@ -193,7 +201,7 @@ class WaypointFollower(Node):
         # 4. Phase 2: publish tau‐law trajectory or switch to flat phase
         if not self.forward_phase and self.step_index < len(self.waypoints):
             current_pos = self.waypoints[self.step_index]
-            final_pos = self.waypoints[self.num_steps-1]
+            final_pos   = self.waypoints[-1]
             dist_to_sam = np.linalg.norm(current_pos - final_pos)
             if dist_to_sam <= self.sam_threshold:
                 # switch to flat phase
@@ -202,7 +210,7 @@ class WaypointFollower(Node):
                 flat_vec = current_pos - prev
                 flat_vec[2] = 0.0
                 self.flat_direction = flat_vec / np.linalg.norm(flat_vec)
-                self.flat_traveled = 0.0
+                self.flat_traveled  = 0.0
                 self.get_logger().info(
                     f'Within {self.sam_threshold} m of SAM — switching to flat phase, '
                     f'flat_velocity={self.flat_velocity} m/s')
@@ -217,15 +225,14 @@ class WaypointFollower(Node):
                 self.wp_pub.publish(pose_msg)
 
                 self.get_logger().info(
-                    f'Published waypoint {self.step_index+1}/{len(self.waypoints)}: {current_pos}'
-                )
+                    f'Published waypoint {self.step_index+1}/{len(self.waypoints)}: {current_pos}')
                 self.step_index += 1
             return
 
         # 5. Flat Phase: move straight ahead at constant flat_velocity
-        if self.forward_phase and self.flat_traveled < self.forward_distance:
+        if self.forward_phase and not self.incline_phase and self.flat_traveled < self.forward_distance:
             step_len = self.flat_velocity * self.dt
-            next_pt = self.quad_pose + self.flat_direction * step_len
+            next_pt  = self.quad_pose + self.flat_direction * step_len
             self.flat_traveled += step_len
 
             pose_msg = PoseStamped()
@@ -240,7 +247,32 @@ class WaypointFollower(Node):
                 f'Flat phase: traveled {self.flat_traveled:.2f}/{self.forward_distance} m')
             return
 
-        # 6. All done
+        # 6. Incline Phase: ascend at 45° with flat_velocity
+        if self.forward_phase and not self.incline_phase:
+            # initialize incline direction once
+            vec3D = np.array([self.flat_direction[0], self.flat_direction[1], 1.0])
+            self.incline_direction = vec3D / np.linalg.norm(vec3D)
+            self.incline_traveled  = 0.0
+            self.incline_phase     = True
+            self.get_logger().info('Starting incline phase at 45°')
+
+        if self.incline_phase and self.incline_traveled < self.incline_distance:
+            step_len = self.flat_velocity * self.dt
+            next_pt  = self.quad_pose + self.incline_direction * step_len
+            self.incline_traveled += step_len
+
+            pose_msg = PoseStamped()
+            pose_msg.header.stamp = self.get_clock().now().to_msg()
+            pose_msg.header.frame_id = 'map'
+            pose_msg.pose.position.x = float(next_pt[0])
+            pose_msg.pose.position.y = float(next_pt[1])
+            pose_msg.pose.position.z = float(next_pt[2])
+            self.wp_pub.publish(pose_msg)
+
+            # self.get_logger().info(f'Incline phase: progressed {self.incline_traveled:.2f}/'{self.incline_distance} m )
+            return
+
+        # 7. All done
         self.get_logger().info('All phases completed. Shutting down node.')
         rclpy.shutdown()
 
