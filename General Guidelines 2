@@ -153,8 +153,9 @@ python3 UI/bolt_selector.py
 
 touch drone_target_publisher2.py
 chmod +x drone_target_publisher2.py
-
-source from colcon_ws
+update setup.py 
+colcon build --packages-select 
+source install/setup.bash  # from colcon_ws
 
 shs@shs:~/colcon_ws$ source install/setup.bash 
 shs@shs:~/colcon_ws$ cd src/smarc2/scripts/
