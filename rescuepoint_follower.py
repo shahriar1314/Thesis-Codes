@@ -10,34 +10,46 @@ class WaypointFollower(Node):
         """
         Node initialization:
         - Sets up parameters for waypoint generation and publishing rate.
-        - Initializes state variables for SAM and quad poses, waypoint list, and step counter.
+        - Initializes state variables for SAM and quad poses, trajectory waypoints, and step counters.
         - Creates ROS subscriptions for SAM and quad odometry.
         - Creates a publisher for sending waypoint setpoints.
         - Starts a timer to trigger waypoint publishing at fixed intervals.
         """
         super().__init__('waypoint_follower')
         # PARAMETERS
-        self.num_steps = 400  # number of waypoints to generate
-        self.dt = 0.05        # time interval (seconds) between waypoint publishes
+        self.num_steps         = 400    # number of tau‐law waypoints
+        self.dt                = 0.05   # time interval [s] between waypoint publishes
         
-        # PARAMETERS FOR TAU BASED TRAJECTORY 
-        self.initial_velocity = 5.0      # m/s
-        self.tau_k = 0.4                 # shape param k
-        self.kd_alpha = 0.8              # α‐coupling exponent
-        self.height_offset = 0.4         # final vertical offset [m]
-        self.start_threshold  = 0.2      # m to consider “arrived” at start
-        
+        # PARAMETERS FOR TAU‐BASED TRAJECTORY 
+        self.initial_velocity  = 5.0    # m/s for both phases
+        self.phase1_velocity   = 15.0   # m/s to go to drone's current position to the starting point 
+        self.tau_k             = 0.4    # shape param k
+        self.kd_alpha          = 0.8    # α‐coupling exponent
+        self.height_offset     = 0.4    # final vertical offset [m]
+        self.start_threshold   = 0.2    # m to consider “arrived” at start
+        self.sam_threshold     = 1.0    # m to consider “close to SAM”
+        self.forward_distance  = 40.0    # m to go forward after SAM
+        self.flat_velocity     = 10.0    # m/s horizontal constant velocity
+
         # STATE
-        self.sam_pose = None     # latest SAM position as numpy array
-        self.quad_pose = None    # latest quadrotor position as numpy array
-        self.waypoints = []      # list of computed waypoints
-        self.step_index = 0      # index of the next waypoint to publish
+        self.sam_pose         = None    # latest SAM position [x,y,z]
+        self.quad_pose        = None    # latest quadrotor position [x,y,z]
+        self.start3D          = None    # perpendicular start point
+        self.touchdown        = None    # tau touchdown point
+        self.reached_start    = False   # have we driven to start3D?
+        self.waypoints        = []      # tau‐law trajectory waypoints
+        self.step_index       = 0       # index for tau waypoints
+
+        # --- FORWARD (flat) PHASE STATE ---
+        self.forward_phase    = False   # have we switched to flat after SAM?
+        self.flat_direction   = None    # unit vector of horizontal motion
+        self.flat_traveled    = 0.0     # distance traveled in flat phase
 
         # Subscribers for SAM and quad odometry
-        self.sub_sam = self.create_subscription(
+        self.sub_sam  = self.create_subscription(
             Odometry, '/sam_auv_v1/core/odom_gt', self.sam_cb, 10)
         self.sub_quad = self.create_subscription(
-            Odometry, '/Quadrotor/odom_gt', self.quad_cb, 10)
+            Odometry, '/Quadrotor/odom_gt',    self.quad_cb, 10)
 
         # Publisher for waypoint setpoints
         self.wp_pub = self.create_publisher(PoseStamped, '/setpoint_position', 10)
@@ -48,14 +60,21 @@ class WaypointFollower(Node):
 
 
     def _generate_tau_trajectory(self, p0, p_td):
+        """
+        Generate a tau‐law curved trajectory from p0 to p_td.
+        Returns an array of shape (num_steps, 3).
+        """
         delta = p0 - p_td
         d0 = np.linalg.norm(delta)
         if d0 < 1e-6:
             return np.tile(p_td, (self.num_steps,1))
 
+        # horizontal unit direction in XY plane
         dir_xy = delta[:2] / np.linalg.norm(delta[:2])
-        alpha0 = np.arcsin((p0[2]-p_td[2]) / d0)
+        # initial pitch angle α₀ between vertical and d₀
+        alpha0 = np.arcsin((p0[2] - p_td[2]) / d0)
 
+        # tau‐law parameters
         tau0 = -d0 / self.initial_velocity
         t_d  = -tau0 / self.tau_k
         inv_k  = 1.0 / self.tau_k
@@ -66,12 +85,15 @@ class WaypointFollower(Node):
             t = t_d * i / (self.num_steps - 1)
             d = d0 * (1.0 - t/t_d)**inv_k
 
-            alpha = alpha0 * (d/d0)**inv_kd
+            # α‐coupling
+            alpha = alpha0 * (d / d0)**inv_kd
             cosA, sinA = np.cos(alpha), np.sin(alpha)
 
+            # horizontal reach & vertical rise
             h = d * cosA
             z = p_td[2] + d * sinA
 
+            # build curved point
             traj[i,0] = p_td[0] + dir_xy[0] * h
             traj[i,1] = p_td[1] + dir_xy[1] * h
             traj[i,2] = z
@@ -98,42 +120,28 @@ class WaypointFollower(Node):
         self.quad_pose = np.array([p.x, p.y, p.z])
         self.get_logger().debug(f'Received quad pose: {self.quad_pose}')
 
-    def _compute_waypoints(self, start: np.ndarray, goal: np.ndarray):
-        """
-        Generate a linear sequence of waypoints from start to goal:
-        - Divides the vector from start to goal into num_steps segments.
-        - Returns a list of intermediate positions (excluding the start).
-
-        Args:
-            start: numpy array [x, y, z] for the starting point.
-            goal: numpy array [x, y, z] for the end point.
-        Returns:
-            List of numpy arrays representing each waypoint.
-        """
-        return [
-            start + (goal - start) * (i / self.num_steps)
-            for i in range(1, self.num_steps + 1)
-        ]
-
     def timer_callback(self):
         """
         Periodic function triggered by ROS timer:
         1. Waits until both SAM and quad poses are available.
-        2. On first run with both poses, computes the waypoint list from quad to SAM.
-        3. Publishes each waypoint in sequence at interval dt.
-        4. Shuts down the node when all waypoints have been published.
+        2. On first run, computes the perpendicular start and touchdown points.
+        3. Phase 1: drives to start3D at initial_velocity.
+           Once within start_threshold, precomputes tau‐law waypoints.
+        4. Phase 2: publishes tau‐law trajectory waypoints.
+           If within sam_threshold of SAM, switches to flat phase.
+        5. Flat Phase: moves straight ahead with flat_velocity, keeping height constant, until forward_distance reached.
+        6. Shuts down the node when the flat phase is completed.
         """
         # 1. Ensure both poses have been received
         if self.sam_pose is None or self.quad_pose is None:
             self.get_logger().warning('Waiting for both SAM and quad odometry...')
             return
 
-        # 2. Compute waypoints only once, swapping start and goal
-        if len(self.waypoints) == 0:  # not self.waypoints: change this logic for V1, V2 trajectory 
-
-            # 1) Define two SAM points: actual and +5 m in X
+        # 2. Compute start3D & touchdown once
+        if self.start3D is None:
+            # 1) Define two SAM points: actual and +4 m in Y
             pA = self.sam_pose
-            pB = pA + np.array([0, 4, 0.0])
+            pB = pA + np.array([0.0, 2.0, 0.0])
 
             # 2) Midpoint in 3D
             mid3D = (pA + pB) / 2.0
@@ -141,52 +149,100 @@ class WaypointFollower(Node):
             # 3) Compute 2D perp direction (on x–y plane)
             delta = pB[:2] - pA[:2]
             perp = np.array([-delta[1], delta[0]])
-            perp_norm = perp / np.linalg.norm(perp)
+            perp /= np.linalg.norm(perp)
 
-            # 4) Offset midpoint by 10 m along perp, and +6 m in Z
+            # 4) Offset midpoint by perpendicular_distance & start_height
             perpendicular_distance = -10.0
             start_height = 7.0
-            start2D = mid3D[:2] + perp_norm * perpendicular_distance
-            start3D = np.array([
-                start2D[0],
-                start2D[1],
-                mid3D[2] + start_height
-            ])
-            touchdown = mid3D + np.array([0.0, 0.0, self.height_offset])
-           
+            start2D = mid3D[:2] + perp * perpendicular_distance
+            self.start3D   = np.array([start2D[0], start2D[1], mid3D[2] + start_height])
+            self.touchdown = mid3D + np.array([0.0, 0.0, self.height_offset])
 
             self.get_logger().info(
-                f'Using start pos {start3D} → goal pos {touchdown}'
+                f'Using start pos {self.start3D} → touchdown pos {self.touchdown}'
             )
 
-            # 5) Precompute straight-line waypoints
-            
-            self.waypoints = self._generate_tau_trajectory(start3D, touchdown) ## V3 : tau based trajectory from perpendicular starting point
-            # self.waypoints = self._compute_waypoints(start3D, mid3D)  ## V2 : straight line approach from perpendicular starting point 
-            # self.waypoints = self._compute_waypoints(self.quad_pose, self.sam_pose) ## V1 : straight line approach from random position 
-            self.get_logger().info(
-                f'Computed {len(self.waypoints)} waypoints from quad to SAM.')
+        # 3. Phase 1: move quad to start3D
+        if not self.reached_start:
+            vec = self.start3D - self.quad_pose
+            dist = np.linalg.norm(vec)
+            if dist <= self.start_threshold:
+                # Arrived at start location
+                self.reached_start = True
+                # Precompute tau‐law trajectory from start to touchdown
+                self.waypoints = self._generate_tau_trajectory(self.start3D, self.touchdown)
+                self.get_logger().info(
+                    f'Reached start. Computed {len(self.waypoints)} tau‐law waypoints.')
+            else:
+                # Step toward the start point at phase1_velocity 
+                step_len = self.phase1_velocity * self.dt
+                direction = vec / dist
+                next_pt = self.quad_pose + direction * min(step_len, dist)
 
-        # 3. Check if we've published all waypoints
-        if self.step_index >= len(self.waypoints):
-            self.get_logger().info('All waypoints sent. Shutting down node.')
-            rclpy.shutdown()
+                pose_msg = PoseStamped()
+                pose_msg.header.stamp = self.get_clock().now().to_msg()
+                pose_msg.header.frame_id = 'map'
+                pose_msg.pose.position.x = float(next_pt[0])
+                pose_msg.pose.position.y = float(next_pt[1])
+                pose_msg.pose.position.z = float(next_pt[2])
+                self.wp_pub.publish(pose_msg)
+
+                self.get_logger().info(f'Moving to start: {dist:.2f} m remaining')
             return
 
-        # Publish next waypoint as a PoseStamped message
-        target = self.waypoints[self.step_index]
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = self.get_clock().now().to_msg()
-        pose_msg.header.frame_id = 'map'
-        pose_msg.pose.position.x = float(target[0])
-        pose_msg.pose.position.y = float(target[1])
-        pose_msg.pose.position.z = float(target[2])
-        self.wp_pub.publish(pose_msg)
+        # 4. Phase 2: publish tau‐law trajectory or switch to flat phase
+        if not self.forward_phase and self.step_index < len(self.waypoints):
+            current_pos = self.waypoints[self.step_index]
+            final_pos = self.waypoints[self.num_steps-1]
+            dist_to_sam = np.linalg.norm(current_pos - final_pos)
+            if dist_to_sam <= self.sam_threshold:
+                # switch to flat phase
+                self.forward_phase = True
+                prev = self.waypoints[max(0, self.step_index-1)]
+                flat_vec = current_pos - prev
+                flat_vec[2] = 0.0
+                self.flat_direction = flat_vec / np.linalg.norm(flat_vec)
+                self.flat_traveled = 0.0
+                self.get_logger().info(
+                    f'Within {self.sam_threshold} m of SAM — switching to flat phase, '
+                    f'flat_velocity={self.flat_velocity} m/s')
+            else:
+                # continue tau trajectory
+                pose_msg = PoseStamped()
+                pose_msg.header.stamp = self.get_clock().now().to_msg()
+                pose_msg.header.frame_id = 'map'
+                pose_msg.pose.position.x = float(current_pos[0])
+                pose_msg.pose.position.y = float(current_pos[1])
+                pose_msg.pose.position.z = float(current_pos[2])
+                self.wp_pub.publish(pose_msg)
 
-        self.get_logger().info(
-            f'Published waypoint {self.step_index + 1}/{len(self.waypoints)}: {target}'
-        )
-        self.step_index += 1
+                self.get_logger().info(
+                    f'Published waypoint {self.step_index+1}/{len(self.waypoints)}: {current_pos}'
+                )
+                self.step_index += 1
+            return
+
+        # 5. Flat Phase: move straight ahead at constant flat_velocity
+        if self.forward_phase and self.flat_traveled < self.forward_distance:
+            step_len = self.flat_velocity * self.dt
+            next_pt = self.quad_pose + self.flat_direction * step_len
+            self.flat_traveled += step_len
+
+            pose_msg = PoseStamped()
+            pose_msg.header.stamp = self.get_clock().now().to_msg()
+            pose_msg.header.frame_id = 'map'
+            pose_msg.pose.position.x = float(next_pt[0])
+            pose_msg.pose.position.y = float(next_pt[1])
+            pose_msg.pose.position.z = float(next_pt[2])
+            self.wp_pub.publish(pose_msg)
+
+            self.get_logger().info(
+                f'Flat phase: traveled {self.flat_traveled:.2f}/{self.forward_distance} m')
+            return
+
+        # 6. All done
+        self.get_logger().info('All phases completed. Shutting down node.')
+        rclpy.shutdown()
 
 
 def main(args=None):
