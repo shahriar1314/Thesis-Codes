@@ -120,6 +120,8 @@ add negative reward to the step count, two agent(!) if possible
 
 ## MANIPULATOR ## 
 
+ros2 pkg create my_cpp_pkg --build-type ament_cmake --dependencies rclcpp std_msgs
+
 
 colcon build --mixin release --executor sequential
 
