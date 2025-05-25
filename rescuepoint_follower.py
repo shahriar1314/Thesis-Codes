@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import rclpy
+import numpy as np
+import math 
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-import numpy as np
+
 
 class WaypointFollower(Node):
     def __init__(self):
@@ -17,45 +19,53 @@ class WaypointFollower(Node):
         """
         super().__init__('waypoint_follower')
         
-        # PARAMETERS NEEDED TO BE CHANGED WHEN DEPLOYING IN REAL DRONE 
-        self.num_steps         = 400    # number of tau‐law waypoints (less waypoints between drone and target-> more speed)
-        self.dt                = 0.05   # time interval [s] between waypoint publishes (higher dt -> less speed)
+        ###  PARAMETERS "NEEDED" TO BE CHANGED WHILE DEPLOYING IN THE REAL DRONE  ###
+        self.target_pos_A                       = None  # REPLACE WITH SAM Head POSITION 
+        self.target_pos_B                       = None  # REPLACE WITH BUOY POSITION
+        self.num_steps                          = 400   # number of tau‐law waypoints (less waypoints between drone and target-> more speed)
+        self.dt                                 = 0.05  # time interval [s] between waypoint publishes (higher dt -> less speed)
+        self.fly_to_start_point_velocity        = 15.0  # m/s to go from drone's current position to the starting point of the approach trajectory 
+        self.vertical_height_offset             = 0.3   # CHANGE WHILE GROUND TESTING, final vertical offset [m] above the water surface, clearance height, 
+        self.rope_proximity_threshold           = 1.0   # m to consider “close to rope" to start the FLAT APPROACH
+        self.flat_forward_distance              = 4.0   # m to go forward horizontally to catch the rope
+        self.flat_forward_velocity              = 1.0   # m/s horizontal constant flat-forward velocity
+        self.horizontal_distance_from_target    = -10.0 # m horizontally how far from the  rope you want to start the pick up approach 
+        self.vertical_distance_from_target      = 7.0   # m vertically how far from the  rope you want to start the pick up approach 
+        self.incline_distance                   = 10.0  # m to ascend along incline direction after picking up the sam
+        self.incline_angle_degree               = 30    # deg to ascend along incline direction after picking up the sam
+
+
+        ###  PARAMETERS "MIGHT NEEDED" TO BE CHANGED WHILE DEPLOYING IN THE REAL DRONE  ###
+        self.tau_trajectory_starting_threshold  = 0.2   # m to consider “arrived” at starting point of tau-trajectory
         
-        # PARAMETERS FOR TAU‐BASED TRAJECTORY 
-        self.initial_velocity  = 5.0    # m/s for both phases
-        self.phase1_velocity   = 15.0   # m/s to go from drone's position to the starting point 
-        self.tau_k             = 0.4    # shape param k
-        self.kd_alpha          = 0.8    # α‐coupling exponent
-        self.height_offset     = 0.3    # final vertical offset [m]
-        self.start_threshold   = 0.2    # m to consider “arrived” at start
-        self.sam_threshold     = 1.0    # m to consider “close to SAM"
-        self.forward_distance  = 4.0    # m to go forward after SAM
-        self.flat_velocity     = 1.0   # m/s horizontal constant velocity
-        self.flat_base_point   = None   # anchor point for flat phase start
-        self.perpendicular_distance = -10.0
-        self.start_height = 7.0
+        ###  PARAMETERS "NOT NEEDED" TO BE CHANGED WHILE DEPLOYING IN THE REAL DRONE  ###
+        self.initial_velocity                   = 5.0    # m/s for for calculating tau trajectory 
+        self.tau_k                              = 0.4    # shape param k
+        self.kd_alpha                           = 0.8    # α‐coupling exponent
+        self.flat_base_point                    = None   # anchor point for flat phase start
+
         
         # PARAMETERS FOR INCLINE PHASE
-        self.incline_distance  = 10.0  # m to ascend along incline
+        
         
         # STATE
-        self.sam_pose          = None   # latest SAM position [x,y,z]
-        self.quad_pose         = None   # latest quadrotor position [x,y,z]
-        self.start3D           = None   # perpendicular start point
-        self.touchdown         = None   # tau touchdown point
-        self.reached_start     = False  # have we driven to start3D?
-        self.waypoints         = []     # tau‐law trajectory waypoints
-        self.step_index        = 0      # index for tau waypoints
+        self.sam_pose                   = None   # latest SAM position [x,y,z]
+        self.quad_pose                  = None   # latest quadrotor position [x,y,z]
+        self.pickup_traj_start_point    = None   # starting point of the pick up trajectory, it is in perpendicular plane to the target
+        self.touchdown                  = None   # tau touchdown point
+        self.reached_start              = False  # have we driven to pickup_traj_start_point?
+        self.waypoints                  = []     # tau‐law trajectory waypoints
+        self.step_index                 = 0      # index for tau waypoints
 
         # --- FORWARD (flat) PHASE STATE ---
-        self.forward_phase     = False  # have we switched to flat after tau?
-        self.flat_direction    = None   # unit vector of horizontal motion
-        self.flat_traveled     = 0.0    # distance traveled in flat phase
+        self.forward_phase              = False  # have we switched to flat after tau?
+        self.flat_direction             = None   # unit vector of horizontal motion
+        self.flat_traveled              = 0.0    # distance traveled in flat phase
 
         # --- INCLINE PHASE STATE ---
-        self.incline_phase     = False  # have we switched to incline?
-        self.incline_direction = None   # unit vector of incline motion
-        self.incline_traveled  = 0.0    # distance traveled along incline
+        self.incline_phase              = False  # have we switched to incline?
+        self.incline_direction          = None   # unit vector of incline motion
+        self.incline_traveled           = 0.0    # distance traveled along incline
 
         # Subscribers for SAM and quad odometry
         self.sub_sam  = self.create_subscription(
@@ -137,12 +147,12 @@ class WaypointFollower(Node):
         Periodic function triggered by ROS timer:
         1. Waits until both SAM and quad poses are available.
         2. On first run, computes the perpendicular start and touchdown points.
-        3. Phase 1: drives to start3D at phase1_velocity.
-           Once within start_threshold, precomputes tau‐law waypoints.
+        3. Phase 1: Fly to Start Point: drives the drone to pickup_traj_start_point (starting point for the tau trajectory) at fly_to_start_point_velocity.
+           Once within tau_trajectory_starting_threshold, precomputes tau‐law waypoints.
         4. Phase 2: publishes tau‐law trajectory waypoints.
-           If within sam_threshold of SAM, switches to flat phase.
-        5. Flat Phase: moves straight ahead with flat_velocity, keeping height constant, until forward_distance reached.
-        6. Incline Phase: after flat, ascends at 45° in same horizontal direction with flat_velocity, for incline_distance.
+           If within rope_proximity_threshold of SAM, switches to flat phase.
+        5. Phase 3: Flat Phase: moves straight ahead with flat_forward_velocity, keeping height constant, until flat_forward_distance reached.
+        6. Phase 4: Incline fly out Phase: after flat, ascends at 45° in same horizontal direction with flat_forward_velocity, for incline_distance.
         7. Shuts down the node when the incline phase is completed.
         """
         # 1. Ensure both poses have been received
@@ -150,43 +160,46 @@ class WaypointFollower(Node):
             self.get_logger().warning('Waiting for both SAM and quad odometry...')
             return
 
-        # 2. Compute start3D & touchdown once
-        if self.start3D is None:
-            # 1) Define SAM & Buoy points + some safe offset-height as ground/water clearance in m 
-            pA = self.sam_pose   # REPLACE WITH SAM POSITION 
-            pB = pA + np.array([0.0, 1.6, 0.0]) # REPLACE WITH BUOY POSITION
+        # 2. Compute pickup_traj_start_point & touchdown once
+        if self.pickup_traj_start_point is None:
 
-            # 2) Midpoint in 3D
-            mid3D = (pA + pB) / 2.0
+            # Initialize target positions if not given by the user
+            if self.target_pos_A is None or self.target_pos_B is None:
+                self.target_pos_A = self.sam_pose
+                self.target_pos_B = self.target_pos_A + np.array([0.0, 1.6, 0.0])
+                self.get_logger().warning('SAM head and Buoy Position not given. Using predefined SAM head and Buoy Position...')
 
-            # 3) Compute 2D perp direction (on x–y plane)
-            delta = pB[:2] - pA[:2]
+            # 1) Midpoint of target A (sam head) and target B (buoy) in 3D
+            mid3D = (self.target_pos_A + self.target_pos_B) / 2.0
+
+            # 2) Compute 2D perp direction (on x–y plane)
+            delta = self.target_pos_B[:2] - self.target_pos_A[:2]
             perp = np.array([-delta[1], delta[0]])
             perp /= np.linalg.norm(perp)
 
-            # 4) Offset midpoint by perpendicular_distance & start_height
-            start2D = mid3D[:2] + perp * self.perpendicular_distance
-            self.start3D   = np.array([start2D[0], start2D[1], mid3D[2] + self.start_height])
-            self.touchdown = mid3D + np.array([0.0, 0.0, self.height_offset])
+            # 3) Offset midpoint by horizontal_distance_from_target & vertical_distance_from_target
+            start2D = mid3D[:2] + perp * self.horizontal_distance_from_target
+            self.pickup_traj_start_point   = np.array([start2D[0], start2D[1], mid3D[2] + self.vertical_distance_from_target]) # starting point of the tau trajectory 
+            self.touchdown = mid3D + np.array([0.0, 0.0, self.vertical_height_offset])
 
             self.get_logger().info(
-                f'Using start pos {self.start3D} → touchdown pos {self.touchdown}'
+                f'Using start pos {self.pickup_traj_start_point} → touchdown pos {self.touchdown}'
             )
 
-        # 3. Phase 1: move quad to start3D
+        # 3. Phase 1: Fly to Start Point to move the drone to pickup_traj_start_point
         if not self.reached_start:
-            vec = self.start3D - self.quad_pose
+            vec = self.pickup_traj_start_point - self.quad_pose
             dist = np.linalg.norm(vec)
-            if dist <= self.start_threshold:
+            if dist <= self.tau_trajectory_starting_threshold:
                 # Arrived at start location
                 self.reached_start = True
                 # Precompute tau‐law trajectory from start to touchdown
-                self.waypoints = self._generate_tau_trajectory(self.start3D, self.touchdown)
+                self.waypoints = self._generate_tau_trajectory(self.pickup_traj_start_point, self.touchdown)
                 self.get_logger().info(
                     f'Reached start. Computed {len(self.waypoints)} tau‐law waypoints.')
             else:
-                # Step toward the start point at phase1_velocity
-                step_len = self.phase1_velocity * self.dt
+                # Step toward the start point at fly_to_start_point_velocity
+                step_len = self.fly_to_start_point_velocity * self.dt
                 direction = vec / dist
                 next_pt = self.quad_pose + direction * min(step_len, dist)
 
@@ -206,7 +219,7 @@ class WaypointFollower(Node):
             current_pos = self.waypoints[self.step_index]
             final_pos   = self.waypoints[-1]
             dist_to_sam = np.linalg.norm(current_pos - final_pos)
-            if dist_to_sam <= self.sam_threshold:
+            if dist_to_sam <= self.rope_proximity_threshold:
                 # switch to flat phase
                 self.forward_phase = True
                 prev = self.waypoints[max(0, self.step_index-1)]
@@ -218,8 +231,8 @@ class WaypointFollower(Node):
 
 
                 self.get_logger().info(
-                    f'Within {self.sam_threshold} m of SAM — switching to flat phase, '
-                    f'flat_velocity={self.flat_velocity} m/s')
+                    f'Within {self.rope_proximity_threshold} m of SAM — switching to flat phase, '
+                    f'flat_forward_velocity={self.flat_forward_velocity} m/s')
             else:
                 # continue tau trajectory
                 pose_msg = PoseStamped()
@@ -235,9 +248,9 @@ class WaypointFollower(Node):
                 self.step_index += 1
             return
 
-        # 5. Phase 3: Flat Phase: move straight ahead at constant flat_velocity
-        if self.forward_phase and not self.incline_phase and self.flat_traveled < self.forward_distance:
-            step_len = self.flat_velocity * self.dt
+        # 5. Phase 3: Flat Phase: move straight ahead at constant flat_forward_velocity
+        if self.forward_phase and not self.incline_phase and self.flat_traveled < self.flat_forward_distance:
+            step_len = self.flat_forward_velocity * self.dt
             next_pt = self.flat_base_point + self.flat_direction * self.flat_traveled
             self.flat_traveled += step_len
 
@@ -251,21 +264,24 @@ class WaypointFollower(Node):
             self.wp_pub.publish(pose_msg)
 
             self.get_logger().info(
-                f'Flat phase: traveled {self.flat_traveled:.2f}/{self.forward_distance} m')
+                f'Flat phase: traveled {self.flat_traveled:.2f}/{self.flat_forward_distance} m')
             return
 
-        # 6. Phase 4: Incline Phase: ascend at 45° with flat_velocity
+        # 6. Phase 4: Incline Phase: ascend at 45° with flat_forward_velocity
         if self.forward_phase and not self.incline_phase:
             # initialize incline direction once
-            vec3D = np.array([self.flat_direction[0], self.flat_direction[1], 1.0])
+            incline_angle_rad = math.radians(self.incline_angle_degree) 
+            h = math.cos(incline_angle_rad)
+            v = math.sin(incline_angle_rad)
+            vec3D = np.array([self.flat_direction[0]*h, self.flat_direction[1]*h, v]) 
             self.incline_direction = vec3D / np.linalg.norm(vec3D)
             self.incline_traveled  = 0.0
             self.incline_phase     = True
             self.get_logger().info('Starting incline phase at 45°')
 
         if self.incline_phase and self.incline_traveled < self.incline_distance:
-            step_len = self.flat_velocity * self.dt
-            start_point = self.flat_base_point + self.flat_direction * self.forward_distance
+            step_len = self.flat_forward_velocity * self.dt
+            start_point = self.flat_base_point + self.flat_direction * self.flat_forward_distance
             next_pt = start_point + self.incline_direction * self.incline_traveled
             self.incline_traveled += step_len
 
@@ -277,7 +293,8 @@ class WaypointFollower(Node):
             pose_msg.pose.position.z = float(next_pt[2])
             self.wp_pub.publish(pose_msg)
 
-            # self.get_logger().info(f'Incline phase: progressed {self.incline_traveled:.2f}/'{self.incline_distance} m )
+            self.get_logger().info(
+                f'Incline Phase: travelled {self.incline_traveled:.2f}/{self.incline_distance} m')
             return
 
         # 7. All done

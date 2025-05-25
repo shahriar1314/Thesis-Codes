@@ -2,6 +2,18 @@ using UnityEngine;
 using Unity.Robotics.ROSTCPConnector;
 using RosMessageTypes.Geometry;  // for PoseStampedMsg
 
+/*
+ * RosWaypointFollower.cs
+ * 
+ * This script subscribes to a ROS 2 topic publishing PoseStamped waypoints
+ * and teleports the Unity GameObject to each new waypoint position.
+ * 
+ * - Converts coordinates from ROS (ENU) to Unity (FLU) convention.
+ * - Uses ROS TCP Connector to subscribe to /setpoint_position topic.
+ * - Updates GameObject's position instantly upon receiving each message.
+ */
+
+
 public class RosWaypointFollower : MonoBehaviour
 {
     [Header("ROS Settings")]
@@ -9,8 +21,8 @@ public class RosWaypointFollower : MonoBehaviour
     public string topicName = "/setpoint_position";
 
     Vector3 m_RosPosition;
-    Vector3 m_UnityPosition; 
-    bool   m_HasTarget = false;
+    Vector3 m_UnityPosition;
+    bool m_HasTarget = false;
 
     void Start()
     {
