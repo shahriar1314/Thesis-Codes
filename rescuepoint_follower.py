@@ -10,15 +10,16 @@ class WaypointFollower(Node):
         """
         Node initialization:
         - Sets up parameters for waypoint generation and publishing rate.
-        - Initializes state variables for SAM and quad poses, trajectory waypoints, and step counters.
+        - Initializes state variables for SAM, Buoy and quad poses, trajectory waypoints, and step counters.
         - Creates ROS subscriptions for SAM and quad odometry.
         - Creates a publisher for sending waypoint setpoints.
         - Starts a timer to trigger waypoint publishing at fixed intervals.
         """
         super().__init__('waypoint_follower')
-        # PARAMETERS
-        self.num_steps         = 400    # number of tau‐law waypoints
-        self.dt                = 0.05   # time interval [s] between waypoint publishes
+        
+        # PARAMETERS NEEDED TO BE CHANGED WHEN DEPLOYING IN REAL DRONE 
+        self.num_steps         = 400    # number of tau‐law waypoints (less waypoints between drone and target-> more speed)
+        self.dt                = 0.05   # time interval [s] between waypoint publishes (higher dt -> less speed)
         
         # PARAMETERS FOR TAU‐BASED TRAJECTORY 
         self.initial_velocity  = 5.0    # m/s for both phases
@@ -28,10 +29,14 @@ class WaypointFollower(Node):
         self.height_offset     = 0.3    # final vertical offset [m]
         self.start_threshold   = 0.2    # m to consider “arrived” at start
         self.sam_threshold     = 1.0    # m to consider “close to SAM"
-        self.forward_distance  = 40.0   # m to go forward after SAM
-        self.flat_velocity     = 10.0   # m/s horizontal constant velocity
+        self.forward_distance  = 4.0    # m to go forward after SAM
+        self.flat_velocity     = 1.0   # m/s horizontal constant velocity
+        self.flat_base_point   = None   # anchor point for flat phase start
+        self.perpendicular_distance = -10.0
+        self.start_height = 7.0
+        
         # PARAMETERS FOR INCLINE PHASE
-        self.incline_distance  = 40.0  # m to ascend along incline
+        self.incline_distance  = 10.0  # m to ascend along incline
         
         # STATE
         self.sam_pose          = None   # latest SAM position [x,y,z]
@@ -98,13 +103,13 @@ class WaypointFollower(Node):
 
             # horizontal reach & vertical rise
             h = d * cosA
-            z = p_td[2] + d * sinA
+            z = d * sinA
 
             # build curved point
             traj[i,0] = p_td[0] + dir_xy[0] * h
             traj[i,1] = p_td[1] + dir_xy[1] * h
-            traj[i,2] = z
-
+            traj[i,2] = p_td[2] + z
+ 
         return traj
 
     def sam_cb(self, msg: Odometry):
@@ -147,9 +152,9 @@ class WaypointFollower(Node):
 
         # 2. Compute start3D & touchdown once
         if self.start3D is None:
-            # 1) Define two SAM points: actual and +2 m in Y
-            pA = self.sam_pose
-            pB = pA + np.array([0.0, 1.6, 0.0])
+            # 1) Define SAM & Buoy points + some safe offset-height as ground/water clearance in m 
+            pA = self.sam_pose   # REPLACE WITH SAM POSITION 
+            pB = pA + np.array([0.0, 1.6, 0.0]) # REPLACE WITH BUOY POSITION
 
             # 2) Midpoint in 3D
             mid3D = (pA + pB) / 2.0
@@ -160,10 +165,8 @@ class WaypointFollower(Node):
             perp /= np.linalg.norm(perp)
 
             # 4) Offset midpoint by perpendicular_distance & start_height
-            perpendicular_distance = -10.0
-            start_height = 7.0
-            start2D = mid3D[:2] + perp * perpendicular_distance
-            self.start3D   = np.array([start2D[0], start2D[1], mid3D[2] + start_height])
+            start2D = mid3D[:2] + perp * self.perpendicular_distance
+            self.start3D   = np.array([start2D[0], start2D[1], mid3D[2] + self.start_height])
             self.touchdown = mid3D + np.array([0.0, 0.0, self.height_offset])
 
             self.get_logger().info(
@@ -211,6 +214,9 @@ class WaypointFollower(Node):
                 flat_vec[2] = 0.0
                 self.flat_direction = flat_vec / np.linalg.norm(flat_vec)
                 self.flat_traveled  = 0.0
+                self.flat_base_point = current_pos.copy()  # <- anchor for flat & incline phase
+
+
                 self.get_logger().info(
                     f'Within {self.sam_threshold} m of SAM — switching to flat phase, '
                     f'flat_velocity={self.flat_velocity} m/s')
@@ -229,11 +235,12 @@ class WaypointFollower(Node):
                 self.step_index += 1
             return
 
-        # 5. Flat Phase: move straight ahead at constant flat_velocity
+        # 5. Phase 3: Flat Phase: move straight ahead at constant flat_velocity
         if self.forward_phase and not self.incline_phase and self.flat_traveled < self.forward_distance:
             step_len = self.flat_velocity * self.dt
-            next_pt  = self.quad_pose + self.flat_direction * step_len
+            next_pt = self.flat_base_point + self.flat_direction * self.flat_traveled
             self.flat_traveled += step_len
+
 
             pose_msg = PoseStamped()
             pose_msg.header.stamp = self.get_clock().now().to_msg()
@@ -247,7 +254,7 @@ class WaypointFollower(Node):
                 f'Flat phase: traveled {self.flat_traveled:.2f}/{self.forward_distance} m')
             return
 
-        # 6. Incline Phase: ascend at 45° with flat_velocity
+        # 6. Phase 4: Incline Phase: ascend at 45° with flat_velocity
         if self.forward_phase and not self.incline_phase:
             # initialize incline direction once
             vec3D = np.array([self.flat_direction[0], self.flat_direction[1], 1.0])
@@ -258,7 +265,8 @@ class WaypointFollower(Node):
 
         if self.incline_phase and self.incline_traveled < self.incline_distance:
             step_len = self.flat_velocity * self.dt
-            next_pt  = self.quad_pose + self.incline_direction * step_len
+            start_point = self.flat_base_point + self.flat_direction * self.forward_distance
+            next_pt = start_point + self.incline_direction * self.incline_traveled
             self.incline_traveled += step_len
 
             pose_msg = PoseStamped()
