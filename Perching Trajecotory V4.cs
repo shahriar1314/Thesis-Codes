@@ -4,7 +4,7 @@ using UnityEngine;
 // Original Version 
 // Probably everything working, k, kd, curved angle
 
-public class PerchingTrajectoryV5 : MonoBehaviour
+public class PerchingTrajectoryV4 : MonoBehaviour
 {
     [Header("Targets")]
     public Transform targetA;
