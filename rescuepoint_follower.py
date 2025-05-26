@@ -3,7 +3,7 @@ import rclpy
 import numpy as np
 import math 
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Pose
 from nav_msgs.msg import Odometry
 
 
@@ -24,7 +24,7 @@ class WaypointFollower(Node):
         self.target_pos_B                       = None  # REPLACE WITH BUOY POSITION
         self.num_steps                          = 400   # number of tau‐law waypoints (less waypoints between drone and target-> more speed)
         self.dt                                 = 0.05  # time interval [s] between waypoint publishes (higher dt -> less speed)
-        self.fly_to_start_point_velocity        = 15.0  # m/s to go from drone's current position to the starting point of the approach trajectory 
+        self.fly_to_start_point_velocity        = 5.0  # m/s to go from drone's current position to the starting point of the approach trajectory 
         self.vertical_height_offset             = 0.3   # CHANGE WHILE GROUND TESTING, final vertical offset [m] above the water surface, clearance height, 
         self.rope_proximity_threshold           = 1.0   # m to consider “close to rope" to start the FLAT APPROACH
         self.flat_forward_distance              = 4.0   # m to go forward horizontally to catch the rope
@@ -74,7 +74,7 @@ class WaypointFollower(Node):
             Odometry, '/Quadrotor/odom_gt',    self.quad_cb, 10)
 
         # Publisher for waypoint setpoints
-        self.wp_pub = self.create_publisher(PoseStamped, '/setpoint_position', 10)
+        self.wp_pub = self.create_publisher(Pose, '/setpoint_position', 10 )
         
         # Timer to call timer_callback at rate 1/dt
         self.timer = self.create_timer(self.dt, self.timer_callback)
@@ -203,15 +203,14 @@ class WaypointFollower(Node):
                 direction = vec / dist
                 next_pt = self.quad_pose + direction * min(step_len, dist)
 
-                pose_msg = PoseStamped()
-                pose_msg.header.stamp = self.get_clock().now().to_msg()
-                pose_msg.header.frame_id = 'map'
-                pose_msg.pose.position.x = float(next_pt[0])
-                pose_msg.pose.position.y = float(next_pt[1])
-                pose_msg.pose.position.z = float(next_pt[2])
+                pose_msg = Pose()
+                pose_msg.position.x = float(next_pt[0])
+                pose_msg.position.y = float(next_pt[1])
+                pose_msg.position.z = float(next_pt[2])
+                pose_msg.orientation.w = 1.0 
                 self.wp_pub.publish(pose_msg)
 
-                self.get_logger().info(f'Moving to start: {dist:.2f} m remaining')
+                self.get_logger().info(f'Moving to start: {dist:.2f} m remaining.') 
             return
 
         # 4. Phase 2: publish tau‐law trajectory or switch to flat phase
@@ -235,12 +234,11 @@ class WaypointFollower(Node):
                     f'flat_forward_velocity={self.flat_forward_velocity} m/s')
             else:
                 # continue tau trajectory
-                pose_msg = PoseStamped()
-                pose_msg.header.stamp = self.get_clock().now().to_msg()
-                pose_msg.header.frame_id = 'map'
-                pose_msg.pose.position.x = float(current_pos[0])
-                pose_msg.pose.position.y = float(current_pos[1])
-                pose_msg.pose.position.z = float(current_pos[2])
+                pose_msg = Pose()
+                pose_msg.position.x = float(current_pos[0])
+                pose_msg.position.y = float(current_pos[1])
+                pose_msg.position.z = float(current_pos[2])
+                pose_msg.orientation.w = 1.0 
                 self.wp_pub.publish(pose_msg)
 
                 self.get_logger().info(
@@ -255,12 +253,11 @@ class WaypointFollower(Node):
             self.flat_traveled += step_len
 
 
-            pose_msg = PoseStamped()
-            pose_msg.header.stamp = self.get_clock().now().to_msg()
-            pose_msg.header.frame_id = 'map'
-            pose_msg.pose.position.x = float(next_pt[0])
-            pose_msg.pose.position.y = float(next_pt[1])
-            pose_msg.pose.position.z = float(next_pt[2])
+            pose_msg = Pose()
+            pose_msg.position.x = float(next_pt[0])
+            pose_msg.position.y = float(next_pt[1])
+            pose_msg.position.z = float(next_pt[2])
+            pose_msg.orientation.w = 1.0 
             self.wp_pub.publish(pose_msg)
 
             self.get_logger().info(
@@ -285,12 +282,11 @@ class WaypointFollower(Node):
             next_pt = start_point + self.incline_direction * self.incline_traveled
             self.incline_traveled += step_len
 
-            pose_msg = PoseStamped()
-            pose_msg.header.stamp = self.get_clock().now().to_msg()
-            pose_msg.header.frame_id = 'map'
-            pose_msg.pose.position.x = float(next_pt[0])
-            pose_msg.pose.position.y = float(next_pt[1])
-            pose_msg.pose.position.z = float(next_pt[2])
+            pose_msg = Pose()
+            pose_msg.position.x = float(next_pt[0])
+            pose_msg.position.y = float(next_pt[1])
+            pose_msg.position.z = float(next_pt[2])
+            pose_msg.orientation.w = 1.0 
             self.wp_pub.publish(pose_msg)
 
             self.get_logger().info(
