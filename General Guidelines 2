@@ -1,3 +1,10 @@
+shs@shs:~/colcon_ws/src/smarc2/scripts$ ./unity_ros_bridge.sh 
+shs@shs:~/colcon_ws/src$ colcon build --packages-select go_to_rescuepoint
+shs@shs:~/colcon_ws/src$ ros2 run go_to_rescuepoint rescuepoint_follower
+
+
+
+
 ## RUNNING ML AGENT ## 
 conda activate ml-agents-3
 mlagents-learn colcon_ws/src/smarc2/simulation/ml_agents/ml-agents-latest_release/config/ppo/trainer_config.yaml --run-id=run19
@@ -149,7 +156,11 @@ source install/setup.bash
 clear
 
 ros2 launch panda_moveit_config moveit_gazebo_obb.py
+
+source install/setup.bash
 ros2 launch yolov8_obb yolov8_obb.launch.py 
+
+source install/setup.bash
 python3 UI/bolt_selector.py
 
 
