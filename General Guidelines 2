@@ -1,12 +1,11 @@
 shs@shs:~/colcon_ws/src/smarc2/scripts$ ./unity_ros_bridge.sh 
 shs@shs:~/colcon_ws/src$ colcon build --packages-select go_to_rescuepoint
 shs@shs:~/colcon_ws/src$ ros2 run go_to_rescuepoint rescuepoint_follower
-
-smarc_messages/odom
-make it namespace quadrotor/odom 
+																																																	
 
 mosquitto -p 1889
 ros2 run smarc_bringups dji_bringup.sh 
+ctrl+B D
 tmux kill-server
 
 ## RUNNING ML AGENT ## 
