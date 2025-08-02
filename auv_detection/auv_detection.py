@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 import glob
+import matplotlib.pyplot as plt
 
 def remove_specular_reflection(image):
     # Convert to float32

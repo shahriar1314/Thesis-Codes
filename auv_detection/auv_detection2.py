@@ -67,7 +67,21 @@ def detect_rectangular_objects(image: np.ndarray, mask_size: int = 30,
     img_back = np.abs(np.fft.ifft2(f_ishift)).astype(np.uint8)
 
     # --- STEP 3: Threshold and find contours ---
-    _, thresh = cv2.threshold(img_back, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Verify histogram and apply threshold
+    hist = cv2.calcHist([img_back], [0], None, [256], [0, 256])
+    
+    # Plot histogram
+    plt.figure()
+    plt.title("Histogram of FFT Filtered Image")
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
+    plt.plot(hist)
+    plt.show()
+
+    if np.max(hist) > 100:  # Example condition based on histogram
+        _, thresh = cv2.threshold(img_back, 30, 255, cv2.THRESH_BINARY)  # Fixed threshold
+    else:
+        _, thresh = cv2.threshold(img_back, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     # --- STEP 4: Filter by rectangular aspect ratio ---
