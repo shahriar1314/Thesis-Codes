@@ -1,0 +1,5 @@
+Train: Train.txt
+names:
+  0: sam
+  1: buoy
+path: .
