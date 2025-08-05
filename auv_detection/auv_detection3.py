@@ -81,16 +81,15 @@ def detect_rectangles(image, min_aspect=2.5, min_area=300, debug=True):
     return rectangles
 
 
-def detect_rectangles2(image, min_aspect=2.5, min_area=300, debug=True):
+def detect_rectangles2(image, min_aspect=2.5, min_area=300, debug=False):
     # 1) Grayscale + blur
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     if debug:
         plt.imshow(gray, cmap='gray'); plt.title("Grayscale"); plt.show()
         plt.imshow(blurred, cmap='gray'); plt.title("Blurred"); plt.show()
-
     # 2) Brightness filter: keep top 10% as-is, rest → 0
-    thresh_val = np.percentile(blurred, 98.5)  # Top 1.5% as threshold
+    thresh_val = np.percentile(blurred, 96)  # Top 1.5% as threshold
     bright_mask = blurred.copy()
     bright_mask[blurred < thresh_val] = 0
 
@@ -118,14 +117,14 @@ def detect_rectangles2(image, min_aspect=2.5, min_area=300, debug=True):
 
         
     # 3) Edge detection on that binary mask
-    edges = cv2.Canny(bright_mask, 50, 150)
-    if debug:
+    edges = cv2.Canny(bright_mask, 50, 180)
+    if True:
         plt.imshow(edges, cmap='gray'); plt.title("Canny on Bright Mask"); plt.show()
 
     # 4) Morphological closing
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
     closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-    if debug:
+    if True:
         plt.imshow(closed, cmap='gray'); plt.title("After Morphology"); plt.show()
 
     # 5) Find contours & filter by aspect ratio + area
@@ -156,10 +155,122 @@ def detect_rectangles2(image, min_aspect=2.5, min_area=300, debug=True):
     return rectangles
 
 
-def detect_auv(image, debug=True):
+
+
+# --- at module scope, before any functions ---
+backSub = cv2.createBackgroundSubtractorKNN(detectShadows=True)
+
+def detect_rectangles3(image, min_aspect=2.5, min_area=300, debug=True):
+    # 1) Grayscale + blur
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # 2) Brightness filter: keep top 10% as-is, rest → 0
+    thresh_val = np.percentile(blurred, 90)
+    bright_mask = blurred.copy()
+    bright_mask[blurred < thresh_val] = 0
+
+    # 3) Specular removal on bright_mask
+    bm_color     = cv2.cvtColor(bright_mask, cv2.COLOR_GRAY2BGR)
+    bm_spec_free = remove_specular_reflection(bm_color)
+    bright_mask  = cv2.cvtColor(bm_spec_free, cv2.COLOR_BGR2GRAY)
+
+    # 4) Mean‐filter to flatten residual noise
+    bright_mask = cv2.blur(bright_mask, (5, 5))
+
+    if debug:
+        plt.imshow(bright_mask, cmap='gray'); plt.title("Clean Bright Mask"); plt.show()
+
+    # 5) --- NEW: KNN background subtraction ---
+    fg_mask = backSub.apply(bright_mask)
+    # Optional: further clean fg_mask by morphology
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
+    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
+
+    if debug:
+        plt.imshow(fg_mask, cmap='gray'); plt.title("KNN Foreground Mask"); plt.show()
+
+    # 6) Canny on the KNN‐cleaned foreground
+    edges = cv2.Canny(fg_mask, 50, 150)
+
+    if debug:
+        plt.imshow(edges, cmap='gray'); plt.title("Canny on FG Mask"); plt.show()
+
+    # 7) Morphology to close gaps
+    edges = cv2.morphologyEx(edges,
+                             cv2.MORPH_CLOSE,
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (7,7)))
+
+    if debug:
+        plt.imshow(edges, cmap='gray'); plt.title("After Morphology"); plt.show()
+
+    # 8) Contour→rectangles filter (as before)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    rectangles = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < min_area:
+            continue
+        rect = cv2.minAreaRect(cnt)
+        w, h = rect[1]
+        if w == 0 or h == 0:
+            continue
+        aspect = max(w, h) / min(w, h)
+        if aspect >= min_aspect:
+            rectangles.append(rect)
+
+    # 9) Debug draw
+    if debug:
+        debug_img = image.copy()
+        for rect in rectangles:
+            box = cv2.boxPoints(rect).astype(int)
+            cv2.drawContours(debug_img, [box], 0, (0, 255, 0), 2)
+        plt.imshow(cv2.cvtColor(debug_img, cv2.COLOR_BGR2RGB))
+        plt.title("Rectangles Detected"); plt.show()
+
+    return rectangles
+
+
+def plotHSV(image):
+
+    # Load image and convert to HSV
+    img_bgr = cv2.imread(image)
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+
+    # Split HSV channels
+    hue = img_hsv[:, :, 0]
+    saturation = img_hsv[:, :, 1]
+    value = img_hsv[:, :, 2]
+
+    # Combine for hover text
+    hover_text = np.empty(hue.shape, dtype=object)
+    for i in range(hue.shape[0]):
+        for j in range(hue.shape[1]):
+            hover_text[i, j] = f"H: {hue[i, j]}, S: {saturation[i, j]}, V: {value[i, j]}"
+
+    # Plot with hover
+    fig = px.imshow(img_rgb, title="Hover to see HSV", aspect="equal")
+    fig.update_traces(
+        hovertemplate='%{customdata}',
+        customdata=hover_text
+    )
+    fig.show()
+
+
+
+
+
+
+
+
+    
+
+def detect_auv(image, debug=False):
     specular_free = remove_specular_reflection(image)
 
-    rectangles = detect_rectangles2(specular_free, min_aspect=3.0, min_area=500, debug=debug)
+    rectangles = detect_rectangles2(specular_free, min_aspect=3.0, min_area=500, debug=False)
 
     output = image.copy()
     best_rect = None
